@@ -1,0 +1,68 @@
+package daemon
+
+import "encoding/json"
+
+// CLI <-> daemon 之间的通信协议，基于 Unix socket + 换行分隔 JSON
+
+// --- 请求（CLI → daemon）---
+
+type RequestType string
+
+const (
+	ReqPrompt   RequestType = "prompt"
+	ReqCompact  RequestType = "compact"
+	ReqStatus   RequestType = "status"
+	ReqShutdown RequestType = "shutdown"
+)
+
+type Request struct {
+	Type    RequestType `json:"type"`
+	Cwd     string      `json:"cwd,omitempty"`
+	Text    string      `json:"text,omitempty"`
+	ModelID string      `json:"modelId,omitempty"`
+}
+
+// --- 响应（daemon → CLI）---
+
+type ResponseType string
+
+const (
+	RespReady    ResponseType = "ready"
+	RespChunk    ResponseType = "chunk"
+	RespToolCall ResponseType = "tool_call"
+	RespDone     ResponseType = "done"
+	RespStatus   ResponseType = "status"
+	RespError    ResponseType = "error"
+)
+
+type Response struct {
+	Type       ResponseType `json:"type"`
+	Text       string       `json:"text,omitempty"`
+	StopReason string       `json:"stopReason,omitempty"`
+	SessionID  string       `json:"sessionId,omitempty"`
+	ModelID    string       `json:"modelId,omitempty"`
+	ToolKind   string       `json:"toolKind,omitempty"`
+	ToolTitle  string       `json:"toolTitle,omitempty"`
+	ToolStatus string       `json:"toolStatus,omitempty"`
+	Error      string       `json:"error,omitempty"`
+	PID        int          `json:"pid,omitempty"`
+	Uptime     string       `json:"uptime,omitempty"`
+}
+
+// Encode 将响应序列化为一行 JSON + 换行
+func Encode(v any) ([]byte, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+// Decode 从 JSON 反序列化
+func Decode[T any](data []byte) (*T, error) {
+	var v T
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}

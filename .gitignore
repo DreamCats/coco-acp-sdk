@@ -1,0 +1,15 @@
+# Binary
+coco-acp
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test
+*.test
+*.out
