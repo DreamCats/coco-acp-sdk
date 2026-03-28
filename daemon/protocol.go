@@ -9,17 +9,30 @@ import "encoding/json"
 type RequestType string
 
 const (
-	ReqPrompt   RequestType = "prompt"
-	ReqCompact  RequestType = "compact"
-	ReqStatus   RequestType = "status"
-	ReqShutdown RequestType = "shutdown"
+	ReqPrompt        RequestType = "prompt"
+	ReqCompact       RequestType = "compact"
+	ReqStatus        RequestType = "status"
+	ReqShutdown      RequestType = "shutdown"
+	ReqSessionNew    RequestType = "session_new"    // 创建新 session
+	ReqSessionClose  RequestType = "session_close"  // 关闭指定 session
+	ReqSessionList   RequestType = "session_list"   // 列出所有 session
 )
 
 type Request struct {
-	Type    RequestType `json:"type"`
-	Cwd     string      `json:"cwd,omitempty"`
-	Text    string      `json:"text,omitempty"`
-	ModelID string      `json:"modelId,omitempty"`
+	Type      RequestType `json:"type"`
+	SessionID string     `json:"sessionId,omitempty"` // 路由到指定 session
+	Cwd       string     `json:"cwd,omitempty"`
+	Text      string     `json:"text,omitempty"`
+	ModelID   string     `json:"modelId,omitempty"`
+}
+
+// SessionResponse 创建/查询 session 的响应
+type SessionResponse struct {
+	SessionID    string `json:"sessionId"`
+	ACPSessionID string `json:"acpSessionId"`
+	ModelID      string `json:"modelId,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	Uptime       string `json:"uptime,omitempty"`
 }
 
 // --- 响应（daemon → CLI）---
@@ -27,12 +40,14 @@ type Request struct {
 type ResponseType string
 
 const (
-	RespReady    ResponseType = "ready"
-	RespChunk    ResponseType = "chunk"
-	RespToolCall ResponseType = "tool_call"
-	RespDone     ResponseType = "done"
-	RespStatus   ResponseType = "status"
-	RespError    ResponseType = "error"
+	RespReady       ResponseType = "ready"
+	RespChunk       ResponseType = "chunk"
+	RespToolCall    ResponseType = "tool_call"
+	RespDone        ResponseType = "done"
+	RespStatus      ResponseType = "status"
+	RespError       ResponseType = "error"
+	RespSessionNew  ResponseType = "session_new"   // 创建 session 成功
+	RespSessionList ResponseType = "session_list"   // session 列表
 )
 
 type Response struct {

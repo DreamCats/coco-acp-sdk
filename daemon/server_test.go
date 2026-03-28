@@ -94,9 +94,7 @@ func startTestServer(t *testing.T) (string, func()) {
 
 	tmpDir := t.TempDir()
 	server := NewServer(tmpDir, "/tmp", 0)
-	server.client = acp.NewClient("/tmp",
-		acp.WithCommandFactory(mockCommandFactory()),
-	)
+	server.SetCommandFactoryForTest(mockCommandFactory())
 
 	ready := make(chan error, 1)
 
@@ -106,7 +104,8 @@ func startTestServer(t *testing.T) (string, func()) {
 			return
 		}
 
-		if err := server.client.Start(server.ctx); err != nil {
+		// 创建默认 session
+		if _, err := server.sessions.CreateSession(server.ctx, "/tmp"); err != nil {
 			ready <- err
 			return
 		}

@@ -22,14 +22,15 @@ const (
 
 // Server 是 daemon 的核心，监听 Unix socket 并转发请求给 ACP client
 type Server struct {
-	configDir    string
-	cwd          string
-	idleTimeout  time.Duration // 空闲超时时间
+	configDir   string
+	cwd         string
+	idleTimeout time.Duration // 空闲超时时间
 
 	listener net.Listener
-	client   *acp.Client
+	sessions SessionManager
 
-	mu           sync.Mutex // 串行化 prompt 请求
+	sessionsMu   sync.RWMutex // 保护 sessions map
+	promptMu     sync.Mutex   // 串行化 prompt 请求（可按 session 细化）
 	idleTimer    *time.Timer
 	startTime    time.Time
 	shutdownOnce sync.Once
@@ -55,17 +56,33 @@ func NewServer(configDir, cwd string, idleTimeout time.Duration) *Server {
 	}
 }
 
-// Run 启动 daemon：初始化 ACP client → 监听 socket → 处理连接
+// SetCommandFactoryForTest 设置命令工厂（仅用于测试）
+func (s *Server) SetCommandFactoryForTest(f acp.CommandFactory) {
+	// 延迟初始化 sessions（因为 Run 之前 sessions 为 nil）
+	if s.sessions == nil {
+		s.sessions = newSessionManager(s.idleTimeout)
+	}
+	if sm, ok := s.sessions.(*sessionManager); ok {
+		sm.SetCommandFactory(f)
+	}
+}
+
+// Run 启动 daemon：初始化 SessionManager → 监听 socket → 处理连接
 func (s *Server) Run() error {
 	if err := os.MkdirAll(s.configDir, 0700); err != nil {
 		return fmt.Errorf("daemon: 创建配置目录失败: %w", err)
 	}
 
-	// 启动 ACP client
-	s.client = acp.NewClient(s.cwd)
-	if err := s.client.Start(s.ctx); err != nil {
-		return fmt.Errorf("daemon: 启动 ACP client 失败: %w", err)
+	// 初始化 SessionManager
+	s.sessions = newSessionManager(s.idleTimeout)
+
+	// 创建默认 session
+	if _, err := s.sessions.CreateSession(s.ctx, s.cwd); err != nil {
+		return fmt.Errorf("daemon: 创建默认 session 失败: %w", err)
 	}
+
+	// 启动空闲检查 goroutine
+	go s.sessions.(*sessionManager).runIdleChecker()
 
 	// 监听 Unix socket
 	sockPath := s.sockPath()
@@ -74,7 +91,7 @@ func (s *Server) Run() error {
 	var err error
 	s.listener, err = net.Listen("unix", sockPath)
 	if err != nil {
-		s.client.Close()
+		s.sessions.Close()
 		return fmt.Errorf("daemon: 监听 socket 失败: %w", err)
 	}
 	_ = os.Chmod(sockPath, 0600)
@@ -91,8 +108,7 @@ func (s *Server) Run() error {
 		s.shutdown()
 	})
 
-	log.Printf("daemon: 已启动 (pid=%d, sock=%s, session=%s)\n",
-		os.Getpid(), sockPath, s.client.SessionID())
+	log.Printf("daemon: 已启动 (pid=%d, sock=%s)\n", os.Getpid(), sockPath)
 
 	s.acceptLoop()
 	return nil
@@ -135,13 +151,19 @@ func (s *Server) handleConn(conn net.Conn) {
 		case ReqPrompt:
 			s.handlePrompt(conn, &req)
 		case ReqCompact:
-			s.handleCompact(conn)
+			s.handleCompact(conn, &req)
 		case ReqStatus:
 			s.handleStatus(conn)
 		case ReqShutdown:
 			s.writeResponse(conn, Response{Type: RespDone, Text: "daemon 正在关闭"})
 			go s.shutdown()
 			return
+		case ReqSessionNew:
+			s.handleSessionNew(conn, &req)
+		case ReqSessionClose:
+			s.handleSessionClose(conn, &req)
+		case ReqSessionList:
+			s.handleSessionList(conn)
 		default:
 			s.writeResponse(conn, Response{Type: RespError, Error: fmt.Sprintf("未知请求类型: %s", req.Type)})
 		}
@@ -150,40 +172,29 @@ func (s *Server) handleConn(conn net.Conn) {
 
 // handlePrompt 转发 prompt 请求给 ACP client，流式回传结果
 func (s *Server) handlePrompt(conn net.Conn, req *Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 如果 CLI 传了新 cwd 且与当前不同，需要重建 session
-	if req.Cwd != "" && req.Cwd != s.cwd {
-		s.cwd = req.Cwd
-		_ = s.client.Close()
-		s.client = acp.NewClient(s.cwd)
-		if err := s.client.Start(s.ctx); err != nil {
-			s.writeResponse(conn, Response{Type: RespError, Error: fmt.Sprintf("重建 session 失败: %v", err)})
-			return
-		}
+	sessionID := req.SessionID
+	if sessionID == "" {
+		// 兼容旧行为：使用默认 session
+		sessionID = s.sessions.GetDefaultSessionID()
 	}
 
-	// 临时设置 notification handler，将通知流式写回当前连接
-	s.client.SetNotifyHandler(func(method string, update *acp.SessionUpdate) {
-		switch update.SessionUpdate {
-		case "agent_message_chunk":
-			if update.Content != nil {
-				s.writeResponse(conn, Response{Type: RespChunk, Text: update.Content.Text})
-			}
-		case "tool_call":
-			s.writeResponse(conn, Response{
-				Type:       RespToolCall,
-				ToolKind:   update.Kind,
-				ToolTitle:  update.Title,
-				ToolStatus: update.Status,
-			})
-		}
-	})
+	s.sessionsMu.RLock()
+	sess := s.sessions.Get(sessionID)
+	s.sessionsMu.RUnlock()
 
-	stopReason, err := s.client.Prompt(s.ctx, req.Text, req.ModelID)
+	if sess == nil {
+		s.writeResponse(conn, Response{Type: RespError, Error: fmt.Sprintf("session not found: %s", sessionID)})
+		return
+	}
 
-	s.client.SetNotifyHandler(nil)
+	// 设置通知回调
+	sess.NotifyHandler = func(method string, update *acp.SessionUpdate) {
+		s.writeSessionResponse(conn, sessionID, update)
+	}
+
+	stopReason, err := sess.Prompt(s.ctx, req.Text, req.ModelID)
+
+	sess.NotifyHandler = nil
 
 	if err != nil {
 		s.writeResponse(conn, Response{Type: RespError, Error: err.Error()})
@@ -193,17 +204,28 @@ func (s *Server) handlePrompt(conn net.Conn, req *Request) {
 	s.writeResponse(conn, Response{
 		Type:       RespDone,
 		StopReason: stopReason,
-		SessionID:  s.client.SessionID(),
-		ModelID:    s.client.Models().CurrentModelID,
+		SessionID:  sessionID,
+		ModelID:    sess.ModelID,
 	})
 }
 
 // handleCompact 执行上下文压缩
-func (s *Server) handleCompact(conn net.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) handleCompact(conn net.Conn, req *Request) {
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = s.sessions.GetDefaultSessionID()
+	}
 
-	if err := s.client.Compact(s.ctx); err != nil {
+	s.sessionsMu.RLock()
+	sess := s.sessions.Get(sessionID)
+	s.sessionsMu.RUnlock()
+
+	if sess == nil {
+		s.writeResponse(conn, Response{Type: RespError, Error: fmt.Sprintf("session not found: %s", sessionID)})
+		return
+	}
+
+	if err := sess.Compact(s.ctx); err != nil {
 		s.writeResponse(conn, Response{Type: RespError, Error: err.Error()})
 		return
 	}
@@ -212,12 +234,71 @@ func (s *Server) handleCompact(conn net.Conn) {
 
 // handleStatus 返回 daemon 状态
 func (s *Server) handleStatus(conn net.Conn) {
+	sessionID := s.sessions.GetDefaultSessionID()
+	sess := s.sessions.Get(sessionID)
+
+	resp := Response{
+		Type:   RespStatus,
+		PID:    os.Getpid(),
+		Uptime: time.Since(s.startTime).Truncate(time.Second).String(),
+	}
+	if sess != nil {
+		resp.SessionID = sessionID
+		resp.ModelID = sess.ModelID
+	}
+	s.writeResponse(conn, resp)
+}
+
+// handleSessionNew 创建新 session
+func (s *Server) handleSessionNew(conn net.Conn, req *Request) {
+	cwd := req.Cwd
+	if cwd == "" {
+		cwd = s.cwd
+	}
+
+	sessionID, err := s.sessions.CreateSession(s.ctx, cwd)
+	if err != nil {
+		s.writeResponse(conn, Response{Type: RespError, Error: fmt.Sprintf("创建 session 失败: %v", err)})
+		return
+	}
+
+	sess := s.sessions.Get(sessionID)
 	s.writeResponse(conn, Response{
-		Type:      RespStatus,
-		PID:       os.Getpid(),
-		SessionID: s.client.SessionID(),
-		ModelID:   s.client.Models().CurrentModelID,
-		Uptime:    time.Since(s.startTime).Truncate(time.Second).String(),
+		Type:   RespSessionNew,
+		Text:   sessionID,
+		ModelID: sess.ModelID,
+	})
+}
+
+// handleSessionClose 关闭指定 session
+func (s *Server) handleSessionClose(conn net.Conn, req *Request) {
+	sessionID := req.SessionID
+	if sessionID == "" {
+		s.writeResponse(conn, Response{Type: RespError, Error: "session ID 不能为空"})
+		return
+	}
+
+	// 不允许关闭最后一个 session
+	if s.sessions.Len() <= 1 {
+		s.writeResponse(conn, Response{Type: RespError, Error: "不能关闭最后一个 session"})
+		return
+	}
+
+	if err := s.sessions.CloseSession(s.ctx, sessionID); err != nil {
+		s.writeResponse(conn, Response{Type: RespError, Error: err.Error()})
+		return
+	}
+
+	s.writeResponse(conn, Response{Type: RespDone, Text: fmt.Sprintf("session %s 已关闭", sessionID)})
+}
+
+// handleSessionList 列出所有 session
+func (s *Server) handleSessionList(conn net.Conn) {
+	ids := s.sessions.ListSessions()
+	data, _ := json.Marshal(ids)
+	s.writeResponse(conn, Response{
+		Type: RespSessionList,
+		Text: string(data),
 	})
 }
 
@@ -231,8 +312,8 @@ func (s *Server) shutdown() {
 		if s.listener != nil {
 			_ = s.listener.Close()
 		}
-		if s.client != nil {
-			_ = s.client.Close()
+		if s.sessions != nil {
+			s.sessions.Close()
 		}
 		_ = os.Remove(s.sockPath())
 		_ = os.Remove(s.pidPath())
@@ -246,6 +327,27 @@ func (s *Server) writeResponse(conn net.Conn, resp Response) {
 		return
 	}
 	_, _ = conn.Write(data)
+}
+
+func (s *Server) writeSessionResponse(conn net.Conn, sessionID string, update *acp.SessionUpdate) {
+	switch update.SessionUpdate {
+	case "agent_message_chunk":
+		if update.Content != nil {
+			s.writeResponse(conn, Response{
+				Type:      RespChunk,
+				Text:      update.Content.Text,
+				SessionID: sessionID,
+			})
+		}
+	case "tool_call":
+		s.writeResponse(conn, Response{
+			Type:       RespToolCall,
+			SessionID:  sessionID,
+			ToolKind:   update.Kind,
+			ToolTitle:  update.Title,
+			ToolStatus: update.Status,
+		})
+	}
 }
 
 func (s *Server) writePID() error {

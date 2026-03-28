@@ -32,8 +32,9 @@ func ConfigDir() string {
 
 // Conn 封装与 daemon 的连接，提供高层方法
 type Conn struct {
-	conn    net.Conn
-	scanner *bufio.Scanner
+	conn           net.Conn
+	scanner        *bufio.Scanner
+	currentSession string // 当前使用的 session ID
 }
 
 // DialOption 连接配置
@@ -78,10 +79,11 @@ func Dial(cwd string, opt *DialOption) (*Conn, error) {
 // Prompt 发送 prompt 请求
 func (c *Conn) Prompt(text, modelID, cwd string, onChunk func(string), onToolCall func(kind, title, status string)) (stopReason string, err error) {
 	req := Request{
-		Type:    ReqPrompt,
-		Text:    text,
-		ModelID: modelID,
-		Cwd:     cwd,
+		Type:      ReqPrompt,
+		SessionID: c.currentSession,
+		Text:      text,
+		ModelID:   modelID,
+		Cwd:       cwd,
 	}
 	if err := c.send(req); err != nil {
 		return "", err
@@ -91,11 +93,87 @@ func (c *Conn) Prompt(text, modelID, cwd string, onChunk func(string), onToolCal
 
 // Compact 发送 compact 请求
 func (c *Conn) Compact() error {
-	if err := c.send(Request{Type: ReqCompact}); err != nil {
+	req := Request{
+		Type:      ReqCompact,
+		SessionID: c.currentSession,
+	}
+	if err := c.send(req); err != nil {
 		return err
 	}
 	_, err := c.readUntilDone(nil, nil)
 	return err
+}
+
+// NewSession 创建新 session
+func (c *Conn) NewSession(cwd string) (*SessionResponse, error) {
+	req := Request{
+		Type: ReqSessionNew,
+		Cwd:  cwd,
+	}
+	if err := c.send(req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.readOne()
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == RespError {
+		return nil, fmt.Errorf("daemon: %s", resp.Error)
+	}
+
+	// 解析 session 信息
+	var result SessionResponse
+	result.SessionID = resp.Text
+	result.ModelID = resp.ModelID
+	return &result, nil
+}
+
+// CloseSession 关闭指定 session
+func (c *Conn) CloseSession(sessionID string) error {
+	req := Request{
+		Type:      ReqSessionClose,
+		SessionID: sessionID,
+	}
+	if err := c.send(req); err != nil {
+		return err
+	}
+
+	resp, err := c.readOne()
+	if err != nil {
+		return err
+	}
+	if resp.Type == RespError {
+		return fmt.Errorf("daemon: %s", resp.Error)
+	}
+	return nil
+}
+
+// ListSessions 列出所有 session
+func (c *Conn) ListSessions() ([]string, error) {
+	req := Request{Type: ReqSessionList}
+	if err := c.send(req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.readOne()
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == RespError {
+		return nil, fmt.Errorf("daemon: %s", resp.Error)
+	}
+
+	var ids []string
+	if err := json.Unmarshal([]byte(resp.Text), &ids); err != nil {
+		return nil, fmt.Errorf("解析 session 列表失败: %w", err)
+	}
+	return ids, nil
+}
+
+// UseSession 设置当前使用的 session（兼容旧行为）
+func (c *Conn) UseSession(sessionID string) {
+	c.currentSession = sessionID
 }
 
 // Status 查询 daemon 状态
