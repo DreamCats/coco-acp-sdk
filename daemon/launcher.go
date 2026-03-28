@@ -38,9 +38,10 @@ type Conn struct {
 
 // DialOption 连接配置
 type DialOption struct {
-	ConfigDir  string // 自定义配置目录
-	DaemonCmd  string // 自定义 daemon 启动命令（可执行文件路径）
-	DaemonArgs []string // daemon 启动参数
+	ConfigDir   string        // 自定义配置目录
+	IdleTimeout time.Duration // 空闲超时时间，0 表示使用默认值
+	DaemonCmd   string        // 自定义 daemon 启动命令（可执行文件路径）
+	DaemonArgs  []string       // daemon 启动参数
 }
 
 // Dial 连接到 daemon，如果 daemon 没在运行则自动拉起
@@ -238,6 +239,10 @@ func startDaemon(cwd string, opt *DialOption) error {
 			return fmt.Errorf("获取可执行文件路径失败: %w", err)
 		}
 		args = []string{"daemon", "start", "--cwd", cwd}
+		// 添加空闲超时参数
+		if opt != nil && opt.IdleTimeout > 0 {
+			args = append(args, "--idle-timeout", opt.IdleTimeout.String())
+		}
 	}
 
 	cmd := execCommand(exe, args...)

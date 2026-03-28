@@ -93,7 +93,7 @@ func startTestServer(t *testing.T) (string, func()) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	server := NewServer(tmpDir, "/tmp")
+	server := NewServer(tmpDir, "/tmp", 0)
 	server.client = acp.NewClient("/tmp",
 		acp.WithCommandFactory(mockCommandFactory()),
 	)

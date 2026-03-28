@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	IdleTimeout = 10 * time.Minute
+	DefaultIdleTimeout = 10 * time.Minute
 )
 
 // Server 是 daemon 的核心，监听 Unix socket 并转发请求给 ACP client
 type Server struct {
-	configDir string
-	cwd       string
+	configDir    string
+	cwd          string
+	idleTimeout  time.Duration // 空闲超时时间
 
 	listener net.Listener
 	client   *acp.Client
@@ -38,14 +39,19 @@ type Server struct {
 }
 
 // NewServer 创建 daemon server
-func NewServer(configDir, cwd string) *Server {
+// idleTimeout 为 0 时使用默认值 DefaultIdleTimeout
+func NewServer(configDir, cwd string, idleTimeout time.Duration) *Server {
+	if idleTimeout == 0 {
+		idleTimeout = DefaultIdleTimeout
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		configDir: configDir,
-		cwd:       cwd,
-		startTime: time.Now(),
-		ctx:       ctx,
-		cancel:    cancel,
+		configDir:    configDir,
+		cwd:          cwd,
+		idleTimeout:  idleTimeout,
+		startTime:    time.Now(),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -80,7 +86,7 @@ func (s *Server) Run() error {
 	}
 
 	// 空闲超时
-	s.idleTimer = time.AfterFunc(IdleTimeout, func() {
+	s.idleTimer = time.AfterFunc(s.idleTimeout, func() {
 		log.Println("daemon: 空闲超时，自动退出")
 		s.shutdown()
 	})
@@ -113,7 +119,7 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
-	s.idleTimer.Reset(IdleTimeout)
+	s.idleTimer.Reset(s.idleTimeout)
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
