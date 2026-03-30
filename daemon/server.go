@@ -60,7 +60,7 @@ func NewServer(configDir, cwd string, idleTimeout time.Duration) *Server {
 func (s *Server) SetCommandFactoryForTest(f acp.CommandFactory) {
 	// 延迟初始化 sessions（因为 Run 之前 sessions 为 nil）
 	if s.sessions == nil {
-		s.sessions = newSessionManager(s.idleTimeout)
+		s.sessions = newSessionManager(s.idleTimeout, nil)
 	}
 	if sm, ok := s.sessions.(*sessionManager); ok {
 		sm.SetCommandFactory(f)
@@ -73,8 +73,12 @@ func (s *Server) Run() error {
 		return fmt.Errorf("daemon: 创建配置目录失败: %w", err)
 	}
 
-	// 初始化 SessionManager
-	s.sessions = newSessionManager(s.idleTimeout)
+	// 初始化 SessionManager 和持久化存储
+	store := NewSessionsStore(s.configDir)
+	if err := store.Load(); err != nil {
+		log.Printf("daemon: 加载 session 历史失败: %v\n", err)
+	}
+	s.sessions = newSessionManager(s.idleTimeout, store)
 
 	// 创建默认 session
 	if _, err := s.sessions.CreateSession(s.ctx, s.cwd); err != nil {
@@ -313,6 +317,10 @@ func (s *Server) shutdown() {
 			_ = s.listener.Close()
 		}
 		if s.sessions != nil {
+			// 持久化 session 列表
+			if sm, ok := s.sessions.(*sessionManager); ok && sm.store != nil {
+				_ = sm.store.Persist()
+			}
 			s.sessions.Close()
 		}
 		_ = os.Remove(s.sockPath())

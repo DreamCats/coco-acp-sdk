@@ -130,10 +130,11 @@ type sessionManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	commandFactory acp.CommandFactory // 可选的命令工厂，用于测试
+	store          *SessionsStore     // session 持久化存储
 }
 
 // newSessionManager 创建 SessionManager
-func newSessionManager(idleTimeout time.Duration) *sessionManager {
+func newSessionManager(idleTimeout time.Duration, store *SessionsStore) *sessionManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	if idleTimeout == 0 {
 		idleTimeout = DefaultIdleTimeout
@@ -142,6 +143,7 @@ func newSessionManager(idleTimeout time.Duration) *sessionManager {
 		idleTimeout: idleTimeout,
 		ctx:         ctx,
 		cancel:      cancel,
+		store:       store,
 	}
 }
 
@@ -174,8 +176,15 @@ func (sm *sessionManager) CreateSession(ctx context.Context, cwd string) (string
 	// 创建 Session 并存储
 	sess := NewSession(sessionID, client)
 	sess.Cwd = cwd
+	sess.ModelID = client.Models().CurrentModelID
 	sess.idleTimeout = sm.idleTimeout
 	sm.sessions.Store(sessionID, sess)
+
+	// 持久化
+	if sm.store != nil {
+		sm.store.Add(sessionID, cwd, sess.ModelID)
+		_ = sm.store.Persist()
+	}
 
 	return sessionID, nil
 }
@@ -188,6 +197,13 @@ func (sm *sessionManager) CloseSession(ctx context.Context, sessionID string) er
 	}
 	sess := val.(*Session)
 	sm.sessions.Delete(sessionID)
+
+	// 持久化
+	if sm.store != nil {
+		sm.store.Remove(sessionID)
+		_ = sm.store.Persist()
+	}
+
 	return sess.Close()
 }
 
