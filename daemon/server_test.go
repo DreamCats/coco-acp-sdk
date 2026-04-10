@@ -82,8 +82,8 @@ func writeJSON(v any) {
 }
 
 func mockCommandFactory() acp.CommandFactory {
-	return func(ctx context.Context) *exec.Cmd {
-		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess")
+	return func(_ context.Context) *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 		cmd.Env = append(os.Environ(), "GO_TEST_ACP_MOCK=1")
 		return cmd
 	}

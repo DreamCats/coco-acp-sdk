@@ -230,8 +230,8 @@ func newMockClient(t *testing.T, mode string, opts ...Option) *Client {
 	t.Helper()
 	allOpts := []Option{
 		WithTimeout(10 * time.Second),
-		WithCommandFactory(func(ctx context.Context) *exec.Cmd {
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess")
+		WithCommandFactory(func(_ context.Context) *exec.Cmd {
+			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 			cmd.Env = append(os.Environ(),
 				"GO_TEST_ACP_MOCK=1",
 				"GO_TEST_ACP_MODE="+mode,
@@ -386,7 +386,7 @@ func TestProcessCrashAndAutoRestart(t *testing.T) {
 			} else {
 				mode = "normal"
 			}
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess")
+			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 			cmd.Env = append(os.Environ(),
 				"GO_TEST_ACP_MOCK=1",
 				"GO_TEST_ACP_MODE="+mode,

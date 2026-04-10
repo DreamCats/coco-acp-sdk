@@ -24,17 +24,18 @@ go vet ./...                      # Vet all packages
 
 ## Architecture
 
-- **`acp/protocol.go`** — JSON-RPC message structs: Request, Response, session types (initialize, session/new, session/prompt, session/update notifications)
-- **`acp/client.go`** — Core client: subprocess management via `os/exec`, stdin/stdout pipe communication, `json.Decoder` for multiplexed response routing (by id for results, by method for notifications), `NotifyHandler` callback for streaming chunks/tool calls, `ensureRunning()` for crash auto-recovery, `ServeFlags` for passing CLI flags (--yolo, --allowed-tool, --query-timeout, etc.) to coco acp serve
-- **`daemon/protocol.go`** — CLI-to-daemon protocol over Unix socket: Request (prompt/compact/status/shutdown/session_new/session_close/session_list) and Response (chunk/tool_call/done/status/error) types
+- **`acp/protocol.go`** — JSON-RPC message structs: Request, Response, session types (initialize, session/new, session/prompt), 5 types of session/update notifications (agent_message_chunk, agent_thought_chunk, tool_call, tool_call_update, available_commands_update), custom UnmarshalJSON/MarshalJSON for polymorphic `content` field
+- **`acp/client.go`** — Core client: subprocess management via `os/exec`, stdin/stdout pipe communication, `json.Decoder` for multiplexed response routing (by id for results, by method for notifications), `NotifyHandler` + `RawNotifyHandler` callbacks for streaming all notification types, `ensureRunning()` for crash auto-recovery, `ServeFlags` for passing CLI flags (--yolo, --allowed-tool, --query-timeout, etc.) to coco acp serve
+- **`daemon/protocol.go`** — CLI-to-daemon protocol over Unix socket: Request (prompt/compact/status/shutdown/session_new/session_close/session_list) and Response (chunk/thought/tool_call/tool_result/commands/done/status/error) types
 - **`daemon/server.go`** — Unix socket server: manages multiple sessions via SessionManager, routes requests by sessionId, idle timeout (10min auto-shutdown), `sync.Once` safe shutdown, `ServerOption` for passing ServeFlags
 - **`daemon/session.go`** — Session and SessionManager: manages multiple independent ACP sessions, each with its own `*acp.Client`, idle timeout checking
-- **`daemon/launcher.go`** — Client-side: `Dial()` connects to daemon (auto-starts if not running), `DialOption` for custom config dir / daemon command / ServeFlags, session management methods (NewSession/CloseSession/ListSessions/UseSession)
+- **`daemon/launcher.go`** — Client-side: `Dial()` connects to daemon (auto-starts if not running), `DialOption` for custom config dir / daemon command / ServeFlags, `PromptHandler` for full notification callbacks, `PromptWithHandler()` for receiving all event types, session management methods (NewSession/CloseSession/ListSessions/UseSession)
 
 **Key design decisions:**
 - `CommandFactory` on acp.Client allows test injection (TestHelperProcess pattern)
 - `ServeFlags` struct maps to `coco acp` CLI flags (--yolo, --allowed-tool, --disallowed-tool, --bash-tool-timeout, --query-timeout, --config), flows from `DialOption` → `Server` → `SessionManager` → `acp.Client` → subprocess args
-- `SetNotifyHandler()` enables per-connection notification routing in daemon
+- `SessionUpdate` uses custom JSON marshal/unmarshal to handle polymorphic `content` field (single TextContent object vs ToolResultItem array)
+- `SetNotifyHandler()` / `SetRawNotifyHandler()` enables per-connection notification routing in daemon
 - `waitDone` channel prevents double `proc.Wait()` deadlock
 - Each session maps to one `*acp.Client` (one coco acp serve subprocess)
 - SessionManager uses `sync.Map` for thread-safe session storage

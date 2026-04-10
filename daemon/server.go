@@ -359,7 +359,7 @@ func (s *Server) writeResponse(conn net.Conn, resp Response) {
 
 func (s *Server) writeSessionResponse(conn net.Conn, sessionID string, update *acp.SessionUpdate) {
 	switch update.SessionUpdate {
-	case "agent_message_chunk":
+	case acp.UpdateAgentMessageChunk:
 		if update.Content != nil {
 			s.writeResponse(conn, Response{
 				Type:      RespChunk,
@@ -367,13 +367,40 @@ func (s *Server) writeSessionResponse(conn net.Conn, sessionID string, update *a
 				SessionID: sessionID,
 			})
 		}
-	case "tool_call":
+	case acp.UpdateAgentThoughtChunk:
+		if update.Content != nil {
+			s.writeResponse(conn, Response{
+				Type:      RespThought,
+				Text:      update.Content.Text,
+				SessionID: sessionID,
+			})
+		}
+	case acp.UpdateToolCall:
 		s.writeResponse(conn, Response{
 			Type:       RespToolCall,
 			SessionID:  sessionID,
+			ToolCallID: update.ToolCallID,
 			ToolKind:   update.Kind,
 			ToolTitle:  update.Title,
 			ToolStatus: update.Status,
+		})
+	case acp.UpdateToolCallUpdate:
+		s.writeResponse(conn, Response{
+			Type:       RespToolResult,
+			SessionID:  sessionID,
+			ToolCallID: update.ToolCallID,
+			ToolStatus: update.Status,
+			Text:       update.ToolResultText(),
+		})
+	case acp.UpdateAvailableCommands:
+		cmds := make([]CommandInfo, 0, len(update.AvailableCommands))
+		for _, c := range update.AvailableCommands {
+			cmds = append(cmds, CommandInfo{Name: c.Name, Description: c.Description})
+		}
+		s.writeResponse(conn, Response{
+			Type:      RespCommands,
+			SessionID: sessionID,
+			Commands:  cmds,
 		})
 	}
 }

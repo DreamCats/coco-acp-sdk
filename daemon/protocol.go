@@ -42,7 +42,10 @@ type ResponseType string
 const (
 	RespReady       ResponseType = "ready"
 	RespChunk       ResponseType = "chunk"
+	RespThought     ResponseType = "thought"       // 模型思考过程片段
 	RespToolCall    ResponseType = "tool_call"
+	RespToolResult  ResponseType = "tool_result"   // 工具调用结果
+	RespCommands    ResponseType = "commands"       // 可用命令列表
 	RespDone        ResponseType = "done"
 	RespStatus      ResponseType = "status"
 	RespError       ResponseType = "error"
@@ -59,9 +62,17 @@ type Response struct {
 	ToolKind   string       `json:"toolKind,omitempty"`
 	ToolTitle  string       `json:"toolTitle,omitempty"`
 	ToolStatus string       `json:"toolStatus,omitempty"`
+	ToolCallID string       `json:"toolCallId,omitempty"` // 工具调用 ID，用于关联 tool_call 和 tool_result
 	Error      string       `json:"error,omitempty"`
 	PID        int          `json:"pid,omitempty"`
 	Uptime     string       `json:"uptime,omitempty"`
+	Commands   []CommandInfo `json:"commands,omitempty"` // 可用命令列表
+}
+
+// CommandInfo daemon 层的命令信息（精简版）
+type CommandInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // Encode 将响应序列化为一行 JSON + 换行

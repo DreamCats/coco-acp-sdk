@@ -52,7 +52,7 @@ if err != nil {
 }
 defer conn.Close()
 
-// 发送 prompt，流式接收
+// 简单用法：只关心文本输出和工具调用
 stopReason, err := conn.Prompt(
     "分析这个函数的复杂度",
     "",    // modelID，空则用默认模型
@@ -60,6 +60,24 @@ stopReason, err := conn.Prompt(
     func(text string) { fmt.Print(text) },          // onChunk
     func(kind, title, status string) {               // onToolCall
         fmt.Printf("[%s] %s\n", status, title)
+    },
+)
+
+// 完整用法：接收所有事件类型
+stopReason, err := conn.PromptWithHandler(
+    "分析这个函数的复杂度", "", "",
+    &daemon.PromptHandler{
+        OnChunk:    func(text string) { fmt.Print(text) },
+        OnThought:  func(text string) { /* 模型思考过程 */ },
+        OnToolCall: func(id, kind, title, status string) {
+            fmt.Printf("[%s] %s (%s)\n", status, title, id)
+        },
+        OnToolResult: func(id, status, text string) {
+            fmt.Printf("工具结果 [%s]: %s\n", id, text[:100])
+        },
+        OnCommands: func(cmds []daemon.CommandInfo) {
+            fmt.Printf("可用命令: %d 个\n", len(cmds))
+        },
     },
 )
 ```
@@ -70,12 +88,21 @@ stopReason, err := conn.Prompt(
 import "github.com/DreamCats/coco-acp-sdk/acp"
 
 client := acp.NewClient("/path/to/repo",
+    acp.WithYolo(), // 跳过工具权限检查，agent 场景推荐
     acp.WithNotifyHandler(func(method string, update *acp.SessionUpdate) {
-        if update.Content != nil {
+        switch update.SessionUpdate {
+        case acp.UpdateAgentMessageChunk:
             fmt.Print(update.Content.Text)
+        case acp.UpdateAgentThoughtChunk:
+            // 模型思考过程
+        case acp.UpdateToolCall:
+            fmt.Printf("[%s] %s (id=%s)\n", update.Status, update.Title, update.ToolCallID)
+        case acp.UpdateToolCallUpdate:
+            fmt.Printf("工具结果: %s\n", update.ToolResultText())
+        case acp.UpdateAvailableCommands:
+            fmt.Printf("可用命令: %d 个\n", len(update.AvailableCommands))
         }
     }),
-    acp.WithYolo(), // 跳过工具权限检查，agent 场景推荐
 )
 defer client.Close()
 
@@ -171,6 +198,20 @@ client := acp.NewClient(cwd, acp.WithYolo())
 | `--bash-tool-timeout` | `BashToolTimeout` | Bash 工具执行超时 |
 | `--query-timeout` | `QueryTimeout` | 单次查询超时 |
 | `-c, --config` | `Configs` | 覆盖配置（k=v 格式） |
+
+## 通知类型
+
+SDK 完整支持 coco acp serve 推送的所有 5 种 `session/update` 通知类型：
+
+| 通知类型 | 常量 | 关键字段 | 说明 |
+|---|---|---|---|
+| `agent_message_chunk` | `acp.UpdateAgentMessageChunk` | `Content.Text` | 模型输出文本片段 |
+| `agent_thought_chunk` | `acp.UpdateAgentThoughtChunk` | `Content.Text`, `Meta` | 模型思考过程（extended thinking） |
+| `tool_call` | `acp.UpdateToolCall` | `ToolCallID`, `Kind`, `Title`, `Status`, `RawInput`, `Locations` | 工具调用开始 |
+| `tool_call_update` | `acp.UpdateToolCallUpdate` | `ToolCallID`, `Status`, `ToolResults[]` | 工具执行结果 |
+| `available_commands_update` | `acp.UpdateAvailableCommands` | `AvailableCommands[]` | 可用 slash 命令列表 |
+
+**daemon 层对应的 Response 类型：** `chunk` / `thought` / `tool_call` / `tool_result` / `commands`
 
 ## 可用模型
 

@@ -21,6 +21,9 @@ var (
 // NotifyHandler 处理 coco acp 推送的通知
 type NotifyHandler func(method string, update *SessionUpdate)
 
+// RawNotifyHandler 处理 coco acp 推送的原始通知（用于诊断和扩展）
+type RawNotifyHandler func(method string, raw json.RawMessage)
+
 // ServeFlags 是传给 coco acp serve 的命令行参数
 type ServeFlags struct {
 	Yolo             bool          // -y, --yolo: 跳过工具权限检查
@@ -59,6 +62,8 @@ func (f *ServeFlags) toArgs() []string {
 }
 
 // CommandFactory 创建子进程的工厂函数，测试时可替换
+// 注意：不要用 exec.CommandContext 绑定 ctx，否则 ctx 取消会杀死子进程。
+// 子进程生命周期应由 Client.Close() 管理。
 type CommandFactory func(ctx context.Context) *exec.Cmd
 
 // Client 管理 coco acp serve 子进程的完整生命周期
@@ -86,7 +91,8 @@ type Client struct {
 	sessionID string
 	models    *ModelsInfo
 
-	onNotify NotifyHandler
+	onNotify    NotifyHandler
+	onRawNotify RawNotifyHandler
 }
 
 // Option 配置选项
@@ -98,6 +104,11 @@ func WithTimeout(d time.Duration) Option {
 
 func WithNotifyHandler(h NotifyHandler) Option {
 	return func(c *Client) { c.onNotify = h }
+}
+
+// WithRawNotifyHandler 设置原始通知回调（收到 notification 时会传入原始 JSON）
+func WithRawNotifyHandler(h RawNotifyHandler) Option {
+	return func(c *Client) { c.onRawNotify = h }
 }
 
 func WithCommandFactory(f CommandFactory) Option {
@@ -136,10 +147,10 @@ func NewClient(cwd string, opts ...Option) *Client {
 		o(c)
 	}
 	if c.newCommand == nil {
-		c.newCommand = func(ctx context.Context) *exec.Cmd {
+		c.newCommand = func(_ context.Context) *exec.Cmd {
 			args := []string{"acp", "serve"}
 			args = append(args, c.serveFlags.toArgs()...)
-			return exec.CommandContext(ctx, "coco", args...)
+			return exec.Command("coco", args...)
 		}
 	}
 	return c
@@ -307,6 +318,11 @@ func (c *Client) SetNotifyHandler(h NotifyHandler) {
 	c.onNotify = h
 }
 
+// SetRawNotifyHandler 动态更换原始通知回调
+func (c *Client) SetRawNotifyHandler(h RawNotifyHandler) {
+	c.onRawNotify = h
+}
+
 // Close 关闭客户端，终止子进程
 func (c *Client) Close() error {
 	c.mu.Lock()
@@ -418,6 +434,11 @@ func (c *Client) readLoop() {
 
 // handleNotification 处理 session/update 通知
 func (c *Client) handleNotification(msg *Response) {
+	// 原始通知回调（诊断 / 扩展用）
+	if c.onRawNotify != nil {
+		c.onRawNotify(msg.Method, msg.Params)
+	}
+
 	if c.onNotify == nil || msg.Method != "session/update" {
 		return
 	}

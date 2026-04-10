@@ -79,8 +79,29 @@ func Dial(cwd string, opt *DialOption) (*Conn, error) {
 	return newConn(conn), nil
 }
 
+// PromptHandler 处理 prompt 响应的回调集合
+type PromptHandler struct {
+	OnChunk      func(text string)                              // 模型输出文本片段
+	OnThought    func(text string)                              // 模型思考过程片段
+	OnToolCall   func(id, kind, title, status string)           // 工具调用开始
+	OnToolResult func(id, status, text string)                  // 工具调用结果
+	OnCommands   func(commands []CommandInfo)                   // 可用命令列表
+}
+
 // Prompt 发送 prompt 请求
 func (c *Conn) Prompt(text, modelID, cwd string, onChunk func(string), onToolCall func(kind, title, status string)) (stopReason string, err error) {
+	return c.PromptWithHandler(text, modelID, cwd, &PromptHandler{
+		OnChunk: onChunk,
+		OnToolCall: func(id, kind, title, status string) {
+			if onToolCall != nil {
+				onToolCall(kind, title, status)
+			}
+		},
+	})
+}
+
+// PromptWithHandler 发送 prompt 请求，使用完整的回调处理器
+func (c *Conn) PromptWithHandler(text, modelID, cwd string, handler *PromptHandler) (stopReason string, err error) {
 	req := Request{
 		Type:      ReqPrompt,
 		SessionID: c.currentSession,
@@ -91,7 +112,7 @@ func (c *Conn) Prompt(text, modelID, cwd string, onChunk func(string), onToolCal
 	if err := c.send(req); err != nil {
 		return "", err
 	}
-	return c.readUntilDone(onChunk, onToolCall)
+	return c.readUntilDoneWithHandler(handler)
 }
 
 // Compact 发送 compact 请求
@@ -241,6 +262,20 @@ func (c *Conn) readOne() (*Response, error) {
 }
 
 func (c *Conn) readUntilDone(onChunk func(string), onToolCall func(kind, title, status string)) (string, error) {
+	return c.readUntilDoneWithHandler(&PromptHandler{
+		OnChunk: onChunk,
+		OnToolCall: func(id, kind, title, status string) {
+			if onToolCall != nil {
+				onToolCall(kind, title, status)
+			}
+		},
+	})
+}
+
+func (c *Conn) readUntilDoneWithHandler(h *PromptHandler) (string, error) {
+	if h == nil {
+		h = &PromptHandler{}
+	}
 	for {
 		resp, err := c.readOne()
 		if err != nil {
@@ -248,12 +283,24 @@ func (c *Conn) readUntilDone(onChunk func(string), onToolCall func(kind, title, 
 		}
 		switch resp.Type {
 		case RespChunk:
-			if onChunk != nil {
-				onChunk(resp.Text)
+			if h.OnChunk != nil {
+				h.OnChunk(resp.Text)
+			}
+		case RespThought:
+			if h.OnThought != nil {
+				h.OnThought(resp.Text)
 			}
 		case RespToolCall:
-			if onToolCall != nil {
-				onToolCall(resp.ToolKind, resp.ToolTitle, resp.ToolStatus)
+			if h.OnToolCall != nil {
+				h.OnToolCall(resp.ToolCallID, resp.ToolKind, resp.ToolTitle, resp.ToolStatus)
+			}
+		case RespToolResult:
+			if h.OnToolResult != nil {
+				h.OnToolResult(resp.ToolCallID, resp.ToolStatus, resp.Text)
+			}
+		case RespCommands:
+			if h.OnCommands != nil {
+				h.OnCommands(resp.Commands)
 			}
 		case RespDone:
 			return resp.StopReason, nil
