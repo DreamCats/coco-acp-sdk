@@ -26,12 +26,12 @@ type RawNotifyHandler func(method string, raw json.RawMessage)
 
 // ServeFlags 是传给 coco acp serve 的命令行参数
 type ServeFlags struct {
-	Yolo             bool          // -y, --yolo: 跳过工具权限检查
-	AllowedTools     []string      // --allowed-tool: 自动批准的工具列表
-	DisallowedTools  []string      // --disallowed-tool: 自动拒绝的工具列表
-	BashToolTimeout  time.Duration // --bash-tool-timeout: Bash 工具超时
-	QueryTimeout     time.Duration // --query-timeout: 单次查询超时
-	Configs          []string      // -c, --config: 覆盖配置 k=v
+	Yolo            bool          // -y, --yolo: 跳过工具权限检查
+	AllowedTools    []string      // --allowed-tool: 自动批准的工具列表
+	DisallowedTools []string      // --disallowed-tool: 自动拒绝的工具列表
+	BashToolTimeout time.Duration // --bash-tool-timeout: Bash 工具超时
+	QueryTimeout    time.Duration // --query-timeout: 单次查询超时
+	Configs         []string      // -c, --config: 覆盖配置 k=v
 }
 
 // toArgs 将 ServeFlags 转换为命令行参数
@@ -177,6 +177,9 @@ func (c *Client) startLocked(ctx context.Context) error {
 	c.readerDone.Store(false)
 
 	proc := c.newCommand(ctx)
+	if c.cwd != "" {
+		proc.Dir = c.cwd
+	}
 	var err error
 
 	c.stdin, err = proc.StdinPipe()

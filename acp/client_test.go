@@ -290,6 +290,35 @@ func TestStartIdempotent(t *testing.T) {
 	}
 }
 
+func TestStartSetsChildProcessDir(t *testing.T) {
+	tempDir := t.TempDir()
+	var spawned *exec.Cmd
+
+	c := NewClient(tempDir,
+		WithTimeout(10*time.Second),
+		WithCommandFactory(func(_ context.Context) *exec.Cmd {
+			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+			cmd.Env = append(os.Environ(),
+				"GO_TEST_ACP_MOCK=1",
+				"GO_TEST_ACP_MODE=normal",
+			)
+			spawned = cmd
+			return cmd
+		}),
+	)
+	defer c.Close()
+
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if spawned == nil {
+		t.Fatal("命令工厂未返回子进程")
+	}
+	if spawned.Dir != tempDir {
+		t.Fatalf("child process Dir = %q, want %q", spawned.Dir, tempDir)
+	}
+}
+
 func TestPrompt(t *testing.T) {
 	c := newMockClient(t, "normal")
 	defer c.Close()
