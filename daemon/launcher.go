@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/DreamCats/coco-acp-sdk/acp"
 )
 
 const (
@@ -39,10 +41,11 @@ type Conn struct {
 
 // DialOption 连接配置
 type DialOption struct {
-	ConfigDir   string        // 自定义配置目录
-	IdleTimeout time.Duration // 空闲超时时间，0 表示使用默认值
-	DaemonCmd   string        // 自定义 daemon 启动命令（可执行文件路径）
-	DaemonArgs  []string       // daemon 启动参数
+	ConfigDir   string          // 自定义配置目录
+	IdleTimeout time.Duration   // 空闲超时时间，0 表示使用默认值
+	DaemonCmd   string          // 自定义 daemon 启动命令（可执行文件路径）
+	DaemonArgs  []string        // daemon 启动参数
+	ServeFlags  *acp.ServeFlags // 传给 coco acp serve 的命令行参数
 }
 
 // Dial 连接到 daemon，如果 daemon 没在运行则自动拉起
@@ -320,6 +323,27 @@ func startDaemon(cwd string, opt *DialOption) error {
 		// 添加空闲超时参数
 		if opt != nil && opt.IdleTimeout > 0 {
 			args = append(args, "--idle-timeout", opt.IdleTimeout.String())
+		}
+		// 添加 coco acp serve 的参数
+		if opt != nil && opt.ServeFlags != nil {
+			if opt.ServeFlags.Yolo {
+				args = append(args, "--yolo")
+			}
+			for _, t := range opt.ServeFlags.AllowedTools {
+				args = append(args, "--allowed-tool", t)
+			}
+			for _, t := range opt.ServeFlags.DisallowedTools {
+				args = append(args, "--disallowed-tool", t)
+			}
+			if opt.ServeFlags.BashToolTimeout > 0 {
+				args = append(args, "--bash-tool-timeout", opt.ServeFlags.BashToolTimeout.String())
+			}
+			if opt.ServeFlags.QueryTimeout > 0 {
+				args = append(args, "--query-timeout", opt.ServeFlags.QueryTimeout.String())
+			}
+			for _, c := range opt.ServeFlags.Configs {
+				args = append(args, "--config", c)
+			}
 		}
 	}
 

@@ -130,6 +130,7 @@ type sessionManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	commandFactory acp.CommandFactory // 可选的命令工厂，用于测试
+	acpOptions     []acp.Option       // 传给 acp.Client 的选项（如 ServeFlags）
 	store          *SessionsStore     // session 持久化存储
 }
 
@@ -152,16 +153,20 @@ func (sm *sessionManager) SetCommandFactory(f acp.CommandFactory) {
 	sm.commandFactory = f
 }
 
+// SetACPOptions 设置传给 acp.Client 的选项
+func (sm *sessionManager) SetACPOptions(opts []acp.Option) {
+	sm.acpOptions = opts
+}
+
 // CreateSession 创建一个新 Session
 func (sm *sessionManager) CreateSession(ctx context.Context, cwd string) (string, error) {
 	// 创建新的 ACP client
-	var client *acp.Client
+	var opts []acp.Option
 	if sm.commandFactory != nil {
-		// 测试模式：使用注入的 commandFactory
-		client = acp.NewClient(cwd, acp.WithCommandFactory(sm.commandFactory))
-	} else {
-		client = acp.NewClient(cwd)
+		opts = append(opts, acp.WithCommandFactory(sm.commandFactory))
 	}
+	opts = append(opts, sm.acpOptions...)
+	client := acp.NewClient(cwd, opts...)
 	if err := client.Start(ctx); err != nil {
 		return "", fmt.Errorf("创建 ACP client 失败: %w", err)
 	}

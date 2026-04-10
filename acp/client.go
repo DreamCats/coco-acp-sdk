@@ -21,6 +21,43 @@ var (
 // NotifyHandler 处理 coco acp 推送的通知
 type NotifyHandler func(method string, update *SessionUpdate)
 
+// ServeFlags 是传给 coco acp serve 的命令行参数
+type ServeFlags struct {
+	Yolo             bool          // -y, --yolo: 跳过工具权限检查
+	AllowedTools     []string      // --allowed-tool: 自动批准的工具列表
+	DisallowedTools  []string      // --disallowed-tool: 自动拒绝的工具列表
+	BashToolTimeout  time.Duration // --bash-tool-timeout: Bash 工具超时
+	QueryTimeout     time.Duration // --query-timeout: 单次查询超时
+	Configs          []string      // -c, --config: 覆盖配置 k=v
+}
+
+// toArgs 将 ServeFlags 转换为命令行参数
+func (f *ServeFlags) toArgs() []string {
+	if f == nil {
+		return nil
+	}
+	var args []string
+	if f.Yolo {
+		args = append(args, "--yolo")
+	}
+	for _, t := range f.AllowedTools {
+		args = append(args, "--allowed-tool", t)
+	}
+	for _, t := range f.DisallowedTools {
+		args = append(args, "--disallowed-tool", t)
+	}
+	if f.BashToolTimeout > 0 {
+		args = append(args, "--bash-tool-timeout", f.BashToolTimeout.String())
+	}
+	if f.QueryTimeout > 0 {
+		args = append(args, "--query-timeout", f.QueryTimeout.String())
+	}
+	for _, c := range f.Configs {
+		args = append(args, "--config", c)
+	}
+	return args
+}
+
 // CommandFactory 创建子进程的工厂函数，测试时可替换
 type CommandFactory func(ctx context.Context) *exec.Cmd
 
@@ -29,6 +66,7 @@ type Client struct {
 	cwd        string
 	timeout    time.Duration
 	clientName string
+	serveFlags *ServeFlags
 	newCommand CommandFactory
 
 	mu     sync.Mutex // 保护 proc / session 等状态
@@ -66,6 +104,21 @@ func WithCommandFactory(f CommandFactory) Option {
 	return func(c *Client) { c.newCommand = f }
 }
 
+// WithServeFlags 设置传给 coco acp serve 的命令行参数
+func WithServeFlags(flags *ServeFlags) Option {
+	return func(c *Client) { c.serveFlags = flags }
+}
+
+// WithYolo 开启 yolo 模式（跳过工具权限检查）
+func WithYolo() Option {
+	return func(c *Client) {
+		if c.serveFlags == nil {
+			c.serveFlags = &ServeFlags{}
+		}
+		c.serveFlags.Yolo = true
+	}
+}
+
 // WithClientName 设置握手时的客户端名称（默认 "coco-acp-sdk"）
 func WithClientName(name string) Option {
 	return func(c *Client) { c.clientName = name }
@@ -84,7 +137,9 @@ func NewClient(cwd string, opts ...Option) *Client {
 	}
 	if c.newCommand == nil {
 		c.newCommand = func(ctx context.Context) *exec.Cmd {
-			return exec.CommandContext(ctx, "coco", "acp", "serve")
+			args := []string{"acp", "serve"}
+			args = append(args, c.serveFlags.toArgs()...)
+			return exec.CommandContext(ctx, "coco", args...)
 		}
 	}
 	return c

@@ -75,6 +75,7 @@ client := acp.NewClient("/path/to/repo",
             fmt.Print(update.Content.Text)
         }
     }),
+    acp.WithYolo(), // 跳过工具权限检查，agent 场景推荐
 )
 defer client.Close()
 
@@ -134,6 +135,42 @@ conn, err := daemon.Dial("/path/to/repo", &daemon.DialOption{
     DaemonArgs: []string{"daemon", "start"},       // 启动参数
 })
 ```
+
+## coco acp serve 参数透传
+
+SDK 支持将 `coco acp` 的所有 CLI flags 透传给子进程，agent 自动化场景强烈建议开启 `--yolo`：
+
+```go
+// daemon 层：通过 DialOption.ServeFlags 透传
+conn, err := daemon.Dial("/path/to/repo", &daemon.DialOption{
+    ServeFlags: &acp.ServeFlags{
+        Yolo:            true,                        // 跳过工具权限检查
+        AllowedTools:    []string{"Bash", "Edit"},    // 自动批准指定工具
+        DisallowedTools: []string{"Replace"},         // 自动拒绝指定工具
+        QueryTimeout:    5 * time.Minute,             // 单次查询超时
+        BashToolTimeout: 30 * time.Second,            // Bash 工具超时
+        Configs:         []string{"model=gpt-5"},     // 覆盖配置
+    },
+})
+
+// acp 层：通过 Option 直接设置
+client := acp.NewClient(cwd, acp.WithServeFlags(&acp.ServeFlags{
+    Yolo:         true,
+    QueryTimeout: 5 * time.Minute,
+}))
+
+// 快捷方式：只开 yolo
+client := acp.NewClient(cwd, acp.WithYolo())
+```
+
+| Flag | ServeFlags 字段 | 说明 |
+|---|---|---|
+| `-y, --yolo` | `Yolo` | 跳过工具权限检查 |
+| `--allowed-tool` | `AllowedTools` | 自动批准的工具列表 |
+| `--disallowed-tool` | `DisallowedTools` | 自动拒绝的工具列表 |
+| `--bash-tool-timeout` | `BashToolTimeout` | Bash 工具执行超时 |
+| `--query-timeout` | `QueryTimeout` | 单次查询超时 |
+| `-c, --config` | `Configs` | 覆盖配置（k=v 格式） |
 
 ## 可用模型
 

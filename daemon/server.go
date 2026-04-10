@@ -24,7 +24,8 @@ const (
 type Server struct {
 	configDir   string
 	cwd         string
-	idleTimeout time.Duration // 空闲超时时间
+	idleTimeout time.Duration    // 空闲超时时间
+	serveFlags  *acp.ServeFlags  // 传给 coco acp serve 的命令行参数
 
 	listener net.Listener
 	sessions SessionManager
@@ -39,14 +40,22 @@ type Server struct {
 	cancel context.CancelFunc
 }
 
+// ServerOption 配置 Server 的选项
+type ServerOption func(*Server)
+
+// WithServerServeFlags 设置传给 coco acp serve 的命令行参数
+func WithServerServeFlags(flags *acp.ServeFlags) ServerOption {
+	return func(s *Server) { s.serveFlags = flags }
+}
+
 // NewServer 创建 daemon server
 // idleTimeout 为 0 时使用默认值 DefaultIdleTimeout
-func NewServer(configDir, cwd string, idleTimeout time.Duration) *Server {
+func NewServer(configDir, cwd string, idleTimeout time.Duration, opts ...ServerOption) *Server {
 	if idleTimeout == 0 {
 		idleTimeout = DefaultIdleTimeout
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{
+	s := &Server{
 		configDir:    configDir,
 		cwd:          cwd,
 		idleTimeout:  idleTimeout,
@@ -54,6 +63,10 @@ func NewServer(configDir, cwd string, idleTimeout time.Duration) *Server {
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // SetCommandFactoryForTest 设置命令工厂（仅用于测试）
@@ -79,6 +92,13 @@ func (s *Server) Run() error {
 		log.Printf("daemon: 加载 session 历史失败: %v\n", err)
 	}
 	s.sessions = newSessionManager(s.idleTimeout, store)
+
+	// 透传 ServeFlags 给 SessionManager
+	if s.serveFlags != nil {
+		if sm, ok := s.sessions.(*sessionManager); ok {
+			sm.SetACPOptions([]acp.Option{acp.WithServeFlags(s.serveFlags)})
+		}
+	}
 
 	// 创建默认 session
 	if _, err := s.sessions.CreateSession(s.ctx, s.cwd); err != nil {
